@@ -1,14 +1,39 @@
 import { EventHandler } from "@create-figma-plugin/utilities";
+import {
+   ColorInput,
+   ExistingColorsResult,
+   GenerateColorsResult,
+} from "./types";
 
 export const COMMANDS = {
-   FETCH_COLLECTION_CALL: "FETCH_COLLECTION_CALL",
-   FETCH_COLLECTION_RESULT: "FETCH_COLLECTION_RESULT",
-   MERGE_COLLECTIONS_CALL: "MERGE_COLLECTIONS_CALL",
-   DUPLICATE_COLLECTION_CALL: "DUPLICATE_COLLECTION_CALL",
-   DUPLICATE_COLLECTION_RESULT: "DUPLICATE_COLLECTION_RESULT",
-   CHANGE_VARIABLE_LOCATION: "CHANGE_VARIABLE_LOCATION",
-   GET_VARIABLE_INFO: "GET_VARIABLE_INFO",
-   LET_USER_KNOW_ABOUT_DEPENDENCIES: "LET_USER_KNOW_ABOUT_DEPENDENCIES",
-   UPDATE_VARIABLE_DEPENDENCIES: "UPDATE_VARIABLE_DEPENDENCIES",
-   ERROR: "ERROR",
+   GENERATE_COLORS: "GENERATE_COLORS",
+   GENERATE_COLORS_RESULT: "GENERATE_COLORS_RESULT",
+   SEARCH_EXISTING_COLORS: "SEARCH_EXISTING_COLORS",
+   SEARCH_EXISTING_COLORS_RESULT: "SEARCH_EXISTING_COLORS_RESULT",
+   APPLY_COLOR_SCALE: "APPLY_COLOR_SCALE"
 };
+
+// Add types for the search command payload
+export type SearchExistingColorsPayload = {
+   collectionName: string;
+};
+
+export interface GenerateColorsHandler extends EventHandler {
+   name: typeof COMMANDS.GENERATE_COLORS;
+   handler: (colorInput: ColorInput) => void;
+}
+
+export interface GenerateColorsResultHandler extends EventHandler {
+   name: typeof COMMANDS.GENERATE_COLORS_RESULT;
+   handler: (result: GenerateColorsResult) => void;
+}
+
+export interface SearchExistingColorsHandler extends EventHandler {
+   name: typeof COMMANDS.SEARCH_EXISTING_COLORS;
+   handler: () => void;
+}
+
+export interface SearchExistingColorsResultHandler extends EventHandler {
+   name: typeof COMMANDS.SEARCH_EXISTING_COLORS_RESULT;
+   handler: (result: ExistingColorsResult) => void;
+}

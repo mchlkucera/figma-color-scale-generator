@@ -28,8 +28,8 @@
       "editorType": [
          "figma"
       ],
-      "id": "duplicate-variables",
-      "name": "Duplicate variables between collections",
+      "id": "color-scale-generator",
+      "name": "Color Scale Generator",
       "main": "src/main.ts",
       "ui": "src/ui.tsx"
    }

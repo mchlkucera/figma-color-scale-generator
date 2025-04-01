@@ -1,518 +1,346 @@
 import {
    Button,
-   Columns,
    Container,
-   IconGrid32,
-   IconTidyGrid32,
-   Muted,
-   render,
    Text,
-   IconCode16,
-   TextboxNumeric,
+   TextboxColor,
    VerticalSpace,
-   IconLibrary32,
-   Modal,
+   render,
+   Dropdown,
 } from "@create-figma-plugin/ui";
 import { emit, on } from "@create-figma-plugin/utilities";
-import { Fragment, h, JSX } from "preact";
-import { useEffect, useState } from "preact/hooks";
-import {
-   Bold,
-   Code,
-   IconChevronDown16,
-   IconChevronUp16,
-   Layer,
-   Stack,
-   Toggle,
-} from "figma-ui-kit";
+import { h, Fragment } from "preact";
+import { useCallback, useEffect, useState } from "preact/hooks";
 import "!./output.css";
 
 import { COMMANDS } from "./commands";
+import { COLOR_SCALE_STEPS, DEFAULT_COLORS } from "./constants";
 import {
-   DndContext,
-   DragEndEvent,
-   MouseSensor,
-   TouchSensor,
-   useDraggable,
-   useDroppable,
-   useSensor,
-   useSensors,
-} from "@dnd-kit/core";
-import { ID_AND_PATH_DELIMETER } from "./constants";
-import { AllAliasedVariableValuesWithNewVariableId } from "./types";
-
-type GroupedVariable = Variable & {
-   children?: GroupedVariable[];
-};
-
-type CollectionWithGroupedVariables = VariableCollection & {
-   groupedVariables: GroupedVariable[];
-};
+   ColorInput,
+   ColorScale,
+   ExistingColorsResult,
+   GenerateColorsResult,
+} from "./types";
+import { generateColorScale, rgbToHex, hexToRgb } from "./utils/colorUtils";
 
 function Plugin() {
-   const [collections, setCollections] = useState<
-      CollectionWithGroupedVariables[]
-   >([]);
-   const [selectedCollections, setSelectedCollections] = useState<string[]>([]);
-   const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(
-      null
+   // State management
+   const [colorInput, setColorInput] = useState<ColorInput>(DEFAULT_COLORS);
+   const [loadingState, setLoadingState] = useState<
+      "loading" | "error" | "success"
+   >("loading");
+   const [previewColors, setPreviewColors] = useState<ColorScale | null>(null);
+   const [selectedCollection, setSelectedCollection] =
+      useState<string>(" 1. Colors");
+
+   // Collection options - could be fetched from the main thread
+   const collectionOptions = [{ value: " 1. Colors" }];
+
+   // Event handlers
+   const handleApplyColorScale = useCallback(() => {
+      const colorScales = generateColorScale(colorInput);
+      console.log("Applying color scales to collection:", selectedCollection);
+
+      emit(COMMANDS.APPLY_COLOR_SCALE, {
+         colorScales,
+         collectionName: selectedCollection,
+      });
+   }, [colorInput, selectedCollection]);
+
+   const handleCollectionChange = useCallback(
+      (event: h.JSX.TargetedEvent<HTMLInputElement>) => {
+         const newValue = event.currentTarget.value;
+         console.log("Selected collection:", newValue);
+         setSelectedCollection(newValue);
+         emit(COMMANDS.SEARCH_EXISTING_COLORS, { collectionName: newValue });
+         setLoadingState("loading");
+      },
+      []
    );
-   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
-   const [duplicatedVariables, setDuplicatedVariables] = useState<string[]>([]);
-   const [updateDependencies, setUpdateDependencies] = useState<boolean>(true);
-   const [modalOpen, setModalOpen] = useState<boolean>(false);
-   const [referencesForConfirmation, setReferencesForConfirmation] = useState<
-      AllAliasedVariableValuesWithNewVariableId[] | null
-   >(null);
 
-   const handleLayerSelection = (
-      id: string,
-      isSelected: boolean,
-      index: number,
-      event: MouseEvent
-   ) => {
-      emit(COMMANDS.FETCH_COLLECTION_CALL);
-      setSelectedCollections((prevSelected) => {
-         let newSelected = [...prevSelected];
+   const handleColorChange = useCallback(
+      (key: keyof ColorInput, value: string) => {
+         setColorInput((prev) => ({
+            ...prev,
+            [key]: value,
+         }));
+      },
+      []
+   );
 
-         if (event.metaKey || event.ctrlKey) {
-            if (isSelected) {
-               newSelected = newSelected.filter((layerId) => layerId !== id);
-            } else {
-               newSelected.push(id);
-            }
-         } else if (event.shiftKey && lastSelectedIndex !== null) {
-            // Shift key: select range
-            const start = Math.min(lastSelectedIndex, index);
-            const end = Math.max(lastSelectedIndex, index);
-            newSelected = collections.slice(start, end + 1).map((c) => c.id);
-         } else {
-            // Normal click: select only this item
-            newSelected = [id];
-         }
-
-         setLastSelectedIndex(index);
-         return newSelected;
-      });
-   };
-
-   const handleSetCollections = (
-      rawCollections: (VariableCollection & {
-         variables: Variable[];
-      })[]
-   ) => {
-      const groupVariables = (variables: Variable[]): GroupedVariable[] => {
-         const result: GroupedVariable[] = [];
-         const groupMap: { [key: string]: GroupedVariable } = {};
-
-         variables.forEach((variable) => {
-            const parts = variable.name.split("/");
-            let current = result;
-            let currentPath = "";
-
-            parts.forEach((part, index) => {
-               currentPath += (index > 0 ? "/" : "") + part;
-               if (!groupMap[currentPath]) {
-                  const newGroup: GroupedVariable = {
-                     ...variable,
-                     name: part,
-                     children: [],
-                  };
-                  groupMap[currentPath] = newGroup;
-                  current.push(newGroup);
-               }
-               if (index < parts.length - 1) {
-                  current = groupMap[currentPath].children!;
-               }
-            });
-         });
-
-         return result;
-      };
-
-      const groupedCollections = rawCollections.map((collection) => ({
-         ...collection,
-         groupedVariables: groupVariables(collection.variables),
-      }));
-
-      setCollections(groupedCollections);
-   };
-
-   const handleDuplicateCollectionResult = (duplicatedVariables: string[]) => {
-      setDuplicatedVariables(duplicatedVariables);
-   };
-
-   const handleLetUserKnowAboutDependencies = (
-      references: AllAliasedVariableValuesWithNewVariableId[]
-   ) => {
-      console.log("go", { references });
-      setReferencesForConfirmation(references);
-      setModalOpen(true);
-   };
-
-   const handleConfirmReferenceChanges = () => {
-      if (referencesForConfirmation) {
-         emit(COMMANDS.UPDATE_VARIABLE_DEPENDENCIES, referencesForConfirmation);
-      }
-      setModalOpen(false);
-      setReferencesForConfirmation(null);
-   };
-
-   const handleCancelChanges = () => {
-      setModalOpen(false);
-      setReferencesForConfirmation(null);
-   };
-
+   // Set up event listeners
    useEffect(() => {
-      emit(COMMANDS.FETCH_COLLECTION_CALL);
-      on(COMMANDS.FETCH_COLLECTION_RESULT, handleSetCollections);
-      on(COMMANDS.ERROR, (error) => {
-         figma.notify(error.message, { error: true });
-      });
-      on(COMMANDS.DUPLICATE_COLLECTION_RESULT, handleDuplicateCollectionResult);
-      on(
-         COMMANDS.LET_USER_KNOW_ABOUT_DEPENDENCIES,
-         handleLetUserKnowAboutDependencies
+      // Handle search results
+      const handleSearchExistingColorsResult = on(
+         COMMANDS.SEARCH_EXISTING_COLORS_RESULT,
+         (result: ExistingColorsResult) => {
+            console.log("Search result received:", result);
+
+            if (!result || result.found === false) {
+               setLoadingState("error");
+               return;
+            }
+
+            if (result.found) {
+               // Create a new color input object with found values
+               const newColorInput = { ...DEFAULT_COLORS };
+               debugger
+               if (result.baseWhite)
+                  newColorInput.baseWhite = result.baseWhite.value;
+               if (result.baseBlack)
+                  newColorInput.baseBlack = result.baseBlack.value;
+               if (result.brand500)
+                  newColorInput.brand500 = result.brand500.value;
+               if (result.primary500)
+                  newColorInput.primary500 = result.primary500.value;
+               if (result.secondary500)
+                  newColorInput.secondary500 = result.secondary500.value;
+               if (result.gray500) newColorInput.gray500 = result.gray500.value;
+
+               // Generate preview with the new colors
+               const preview = generateColorScale(newColorInput);
+
+               // Update all states
+               setColorInput(newColorInput);
+               setPreviewColors(preview);
+               setLoadingState("success");
+            }
+         }
       );
+
+      // Clean up listeners
+      return () => {
+         handleSearchExistingColorsResult();
+      };
    }, []);
 
+   // Initial setup
    useEffect(() => {
-      if (duplicatedVariables.length > 0) {
-         const timer = setTimeout(() => {
-            setDuplicatedVariables([]);
-         }, 5000);
+      console.log("Setting up initial search...");
+      setLoadingState("loading");
 
-         return () => clearTimeout(timer);
-      }
-   }, [duplicatedVariables]);
-
-   const isNoneSelected = selectedCollections.length === 0;
-   const isMoreThanOneSelected = selectedCollections.length > 1;
-
-   const toggleGroup = (groupPath: string) => {
-      setExpandedGroups((prev) => {
-         const newSet = new Set(prev);
-         if (newSet.has(groupPath)) {
-            newSet.delete(groupPath);
-         } else {
-            newSet.add(groupPath);
-         }
-         return newSet;
+      // Initial search
+      emit(COMMANDS.SEARCH_EXISTING_COLORS, {
+         collectionName: selectedCollection,
       });
-   };
 
-   const renderGroupedVariables = (
-      variables: GroupedVariable[],
-      path: string = ""
-   ) =>
-      variables.map((variable) => (
-         <VariableItem
-            variable={variable}
-            path={path}
-            expandedGroups={expandedGroups}
-            toggleGroup={toggleGroup}
-            renderGroupedVariables={renderGroupedVariables}
-            isDuplicated={duplicatedVariables.includes(variable.id)}
-         />
-      ));
+      // Fallback if search takes too long
+      const timeout = setTimeout(() => {
+         console.log("Search timeout triggered, showing UI anyway");
+         const defaultPreview = generateColorScale(DEFAULT_COLORS);
+         setPreviewColors(defaultPreview);
+         setLoadingState("success");
+      }, 2000);
 
-   const CollectionItem = ({
-      collection,
-      index,
-      handleLayerSelection,
-      isSelected,
-   }: {
-      collection: CollectionWithGroupedVariables;
-      index: number;
-      handleLayerSelection: (
-         id: string,
-         isSelected: boolean,
-         index: number,
-         event: MouseEvent
-      ) => void;
-      isSelected: boolean;
-   }) => {
-      const { isOver, setNodeRef } = useDroppable({
-         id: collection.id,
-      });
-      const style = {
-         color: isOver ? "green" : undefined,
-      };
+      return () => clearTimeout(timeout);
+   }, []);
 
-      return (
-         <div className="w-full" ref={setNodeRef} style={style}>
-            <Layer
-               icon={<IconLibrary32 className="scale-90 -m-2.5" />}
-               key={collection.id}
-               onClick={(event: JSX.TargetedMouseEvent<HTMLInputElement>) => {
-                  handleLayerSelection(
-                     collection.id,
-                     event.currentTarget.checked,
-                     index,
-                     event
-                  );
-               }}
-               value={isSelected}
-            >
-               {collection.name}
-            </Layer>
-         </div>
-      );
-   };
-
-   const handleDragEnd = (result: DragEndEvent) => {
-      const from = result.active.id;
-      const to = result.over?.id;
-
-      if (!from || !to) {
-         return;
-      }
-
-      emit(COMMANDS.CHANGE_VARIABLE_LOCATION, { from, to, updateDependencies });
-   };
-
-   const mouseSensor = useSensor(MouseSensor, {
-      activationConstraint: {
-         delay: 300,
-         distance: 5,
-      },
-   });
-
-   const sensors = useSensors(mouseSensor);
-
-   const selectedCollection = collections.find(
-      (c) => c.id === selectedCollections[0]
-   );
+   // Update preview when colors change
+   useEffect(() => {
+      const preview = generateColorScale(colorInput);
+      setPreviewColors(preview);
+   }, [colorInput]);
 
    return (
-      <DndContext onDragEnd={handleDragEnd} sensors={sensors}>
-         <Modal
-            onCloseButtonClick={handleCancelChanges}
-            onOverlayClick={handleCancelChanges}
-            open={modalOpen}
-            title="Confirm Variable References Update"
-         >
-            <div
-               style={{
-                  padding: "16px",
-                  width: "400px",
-                  maxHeight: "300px",
-                  display: "flex",
-                  flexDirection: "column",
-               }}
-            >
-               <Text>
-                  <Muted>
-                     {referencesForConfirmation
-                        ? `Update ${referencesForConfirmation.length} variable reference(s)?`
-                        : "No references to update."}
-                  </Muted>
-               </Text>
+      <Container space="medium">
+         <VerticalSpace space="large" />
+         <Text className="text-xl font-bold mb-4">Color Scale Generator</Text>
 
-               <VerticalSpace space="small" />
+         {/* Collection Selection */}
+         <div className="mb-4">
+            <Text>Collection</Text>
+            <VerticalSpace space="small" />
+            <Dropdown
+               onChange={handleCollectionChange}
+               options={collectionOptions}
+               value={selectedCollection}
+            />
+         </div>
 
-               <Text>
-                  <Muted>
-                     Description: Variable name, Old collection → New collection
-                  </Muted>
-               </Text>
+         {/* Loading States */}
+         {loadingState === "loading" && <Text>Loading color variables...</Text>}
+         {loadingState === "error" && (
+            <Text>Failed to load color variables</Text>
+         )}
+
+         {/* Main Content */}
+         {loadingState === "success" && (
+            <div>
+               <ColorInputsPanel
+                  colorInput={colorInput}
+                  onColorChange={handleColorChange}
+               />
 
                <VerticalSpace space="medium" />
 
-               <div style={{ flexGrow: 1, overflowY: "auto" }}>
-                  <ul className="flex flex-col space-y-1">
-                     {referencesForConfirmation?.map((reference) => (
-                        <li className="py-1">
-                           <Text>
-                              <Code>
-                                 {reference.variableName}:{" "}
-                                 <Muted>{reference.collectionName}</Muted> →{" "}
-                                 {reference.newVariableCollectionName}
-                              </Code>
-                           </Text>
-                        </li>
-                     ))}
-                  </ul>
+               <div className="w-full">
+                  <Button onClick={handleApplyColorScale} fullWidth>
+                     Apply Color Scale
+                  </Button>
                </div>
 
-               <VerticalSpace space="medium" />
+               <VerticalSpace space="large" />
 
-               <div className="flex items-center gap-2 justify-end">
-                  {referencesForConfirmation ? (
-                     <Fragment>
-                        <Button onClick={handleCancelChanges} secondary>
-                           Cancel
-                        </Button>
-                        <Button onClick={handleConfirmReferenceChanges}>
-                           Confirm Changes
-                        </Button>
-                     </Fragment>
-                  ) : (
-                     <Button onClick={handleCancelChanges} secondary>
-                        Close
-                     </Button>
-                  )}
-               </div>
+               <ColorPreview previewColors={previewColors} />
             </div>
-         </Modal>
-
-         <div style={{ paddingBottom: BOTTOM_PANEL_HEIGHT }}>
-            <div className="grid grid-cols-3">
-               <div className="border-r border-white/10">
-                  <VerticalSpace space="medium" />
-
-                  <Container space="extraSmall">
-                     <Text>
-                        <Muted>Collections</Muted>
-                     </Text>
-                  </Container>
-
-                  <VerticalSpace space="small" />
-
-                  {collections?.map((collection, index) => (
-                     <CollectionItem
-                        collection={collection}
-                        index={index}
-                        handleLayerSelection={handleLayerSelection}
-                        isSelected={selectedCollections.includes(collection.id)}
-                     />
-                  ))}
-               </div>
-               <div className={"col-span-2"}>
-                  <VerticalSpace space="medium" />
-                  <div>
-                     <Container space="small">
-                        <Text>
-                           <Bold>
-                              {isNoneSelected
-                                 ? "No collection selected"
-                                 : "Selected: "}
-
-                              {isMoreThanOneSelected
-                                 ? `${selectedCollections.length} collections`
-                                 : selectedCollection?.name}
-                           </Bold>
-                        </Text>
-                     </Container>
-
-                     <VerticalSpace space="small" />
-
-                     {selectedCollections.length === 1 && (
-                        <div>
-                           {selectedCollection?.groupedVariables.length > 0 ? (
-                              renderGroupedVariables(
-                                 selectedCollection?.groupedVariables || []
-                              )
-                           ) : (
-                              <Container space="extraSmall">
-                                 <Muted>No variables</Muted>
-                              </Container>
-                           )}
-                        </div>
-                     )}
-                  </div>
-               </div>
-            </div>
-         </div>
-         <div
-            className="fixed bottom-0 left-0 right-0 bg-[#2C2C2C] z-[1] border-t border-white/10 flex  items-center"
-            style={{ height: BOTTOM_PANEL_HEIGHT }}
-         >
-            <Container space="medium">
-               <Toggle
-                  onChange={function (
-                     event: JSX.TargetedEvent<HTMLInputElement>
-                  ) {
-                     setUpdateDependencies(event.target.checked);
-                  }}
-                  value={updateDependencies}
-               >
-                  <div className="flex flex-col gap-1">
-                     <Text>Update dependencies</Text>
-                     <Text className="text-[10px]">
-                        <Muted>
-                           Update all variable references to the new duplicated
-                           variable.
-                        </Muted>
-                     </Text>
-                  </div>
-               </Toggle>
-            </Container>
-         </div>
-      </DndContext>
+         )}
+      </Container>
    );
 }
 
-const BOTTOM_PANEL_HEIGHT = 50;
-
-const VariableItem = ({
-   variable,
-   path,
-   expandedGroups,
-   toggleGroup,
-   renderGroupedVariables,
-   isDuplicated,
+// Component for color inputs
+function ColorInputsPanel({
+   colorInput,
+   onColorChange,
 }: {
-   variable: GroupedVariable;
-   path: string;
-   expandedGroups: Set<string>;
-   toggleGroup: (path: string) => void;
-   renderGroupedVariables: (
-      variables: GroupedVariable[],
-      currentPath: string
-   ) => JSX.Element;
-   isDuplicated: boolean;
-}) => {
-   const currentPath = path ? `${path}/${variable.name}` : variable.name;
-   const isExpanded = expandedGroups.has(currentPath);
-   const hasChildren = variable.children && variable.children.length > 0;
-   const { attributes, listeners, setNodeRef, transform, isDragging } =
-      useDraggable({
-         id: variable.id + ID_AND_PATH_DELIMETER + currentPath,
-      });
-   const style = transform
-      ? {
-           transform: `translate3d(${transform.x}px, ${transform.y}px, 0)`,
-           zIndex: 999,
-           cursor: "copy",
-        }
-      : undefined;
+   colorInput: ColorInput;
+   onColorChange: (key: keyof ColorInput, value: string) => void;
+}) {
+   return (
+      <div className="grid grid-cols-2 gap-4">
+         <div>
+            <ColorInputField
+               label="White"
+               value={colorInput.baseWhite}
+               onChange={(value) => onColorChange("baseWhite", value)}
+            />
+            <ColorInputField
+               label="Black"
+               value={colorInput.baseBlack}
+               onChange={(value) => onColorChange("baseBlack", value)}
+            />
+         </div>
 
-   const className = isDuplicated ? "bg-green-500/10" : undefined;
+         <div>
+            <ColorInputField
+               label="Brand"
+               value={colorInput.brand500}
+               onChange={(value) => onColorChange("brand500", value)}
+            />
+            <ColorInputField
+               label="Primary"
+               value={colorInput.primary500}
+               onChange={(value) => onColorChange("primary500", value)}
+            />
+            <ColorInputField
+               label="Secondary"
+               value={colorInput.secondary500}
+               onChange={(value) => onColorChange("secondary500", value)}
+            />
+            <div>
+               <ColorInputField
+                  label="Gray"
+                  value={colorInput.gray500}
+                  onChange={(value) => onColorChange("gray500", value)}
+               />
+            </div>
+         </div>
+      </div>
+   );
+}
+
+// Color input field component
+function ColorInputField({
+   label,
+   value,
+   onChange,
+}: {
+   label: string;
+   value: string;
+   onChange: (value: string) => void;
+}) {
+   const [hexColor, setHexColor] = useState<string>(value);
+   const [opacity, setOpacity] = useState<string>("100");
+
+   useEffect(() => {
+      setHexColor(value);
+   }, [value]);
+
+   const handleHexColorInput = (
+      event: h.JSX.TargetedEvent<HTMLInputElement>
+   ) => {
+      setHexColor(event.currentTarget.value);
+   };
+
+   const handleBlur = () => {
+      onChange(hexColor);
+   };
+
+   const handleOpacityInput = (
+      event: h.JSX.TargetedEvent<HTMLInputElement>
+   ) => {
+      setOpacity(event.currentTarget.value);
+   };
 
    return (
-      <Fragment key={variable.id}>
-         <div
-            ref={setNodeRef}
-            style={style}
-            className={className}
-            {...listeners}
-            {...attributes}
-         >
-            <Layer
-               value={false}
-               onClick={(e: JSX.TargetedMouseEvent<HTMLInputElement>) => {
-                  e.stopPropagation();
-                  toggleGroup(currentPath);
-               }}
-               icon={
-                  hasChildren ? (
-                     <div className={isExpanded ? "rotate-180" : "rotate-90"}>
-                        <IconChevronUp16 />
-                     </div>
-                  ) : null
-               }
-            >
-               {variable.name} {isDragging && "🚁"}{" "}
-            </Layer>
+      <div className="mb-4">
+         <div className="flex items-center mb-2">
+            <Text>{label}</Text>
          </div>
-         {isExpanded && hasChildren && (
-            <div className="ml-4">
-               {renderGroupedVariables(variable.children!, currentPath)}
-            </div>
-         )}
-      </Fragment>
+         <div onBlur={handleBlur}>
+            <TextboxColor
+               hexColor={hexColor}
+               onHexColorInput={handleHexColorInput}
+               onOpacityInput={handleOpacityInput}
+               opacity={opacity}
+            />
+         </div>
+      </div>
    );
-};
+}
+
+// Color preview component
+function ColorPreview({ previewColors }: { previewColors: ColorScale | null }) {
+   if (!previewColors) return null;
+
+   return (
+      <div className="mt-6">
+         <Text className="font-bold text-lg mb-4">Color Scale Preview</Text>
+
+         <div>
+            <ColorScaleRow title="Brand" colors={previewColors.brand} />
+            <ColorScaleRow title="Primary" colors={previewColors.primary} />
+            <ColorScaleRow title="Secondary" colors={previewColors.secondary} />
+            <ColorScaleRow title="Gray" colors={previewColors.gray} />
+         </div>
+      </div>
+   );
+}
+
+// Color scale row component
+function ColorScaleRow({
+   title,
+   colors,
+}: {
+   title: string;
+   colors: Record<string, string>;
+}) {
+   return (
+      <div className="mb-6">
+         <Text className="font-bold mb-2">{title}</Text>
+         <div className="flex justify-between">
+            {COLOR_SCALE_STEPS.map((step) => (
+               <ColorSwatch
+                  key={`${title}-${step}`}
+                  color={colors[step]}
+                  label={step.toString()}
+               />
+            ))}
+         </div>
+      </div>
+   );
+}
+
+// Color swatch component
+function ColorSwatch({ color, label }: { color: string; label: string }) {
+   return (
+      <div className="flex flex-col items-center">
+         <div
+            className="w-6 h-6 rounded mb-1"
+            style={{ backgroundColor: `#${color}` }}
+         />
+         <Text className="text-xs">{label}</Text>
+      </div>
+   );
+}
 
 export default render(Plugin);
